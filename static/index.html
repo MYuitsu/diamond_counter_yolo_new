@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="vi">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Phân Tích Kim Cương</title>
+  <link rel="stylesheet" href="style.css" />
+  <link href="https://fonts.googleapis.com/css2?family=Pacifico&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Roboto:wght@300;400;500;700&display=swap" rel="stylesheet" />
+  
+</head>
+
+<body>
+  <div class="container">
+    <div class="help-icon" id="helpIcon" title="Lưu ý">?</div>
+    <div class="header">
+      <div class="h" style="background-color: #122A05;">
+
+      </div>
+      <div class="h1">
+      </div>
+      <div class="h2">
+        <div class="image">
+          <img src="/static/imgs/diamond.gif">
+        </div>
+        <p>Hồng Phúc</p>
+      </div>
+    </div>
+    <div class="main-content">
+      <div class="image-processing-container">
+        <div class="upload-capture-section card">
+          <h2>Nhập Hình Ảnh</h2>
+          <div class="tabs">
+            <button class="tab-btn active" data-tab="uploadTab"
+              style="background-color: #E6266F ;color: #333;font-weight: bold;font-size: 15px;border-radius: 15px;">Tải
+              Lên Hình Ảnh</button>
+            <button class="tab-btn" data-tab="captureTab"
+              style="background-color:  #E6266F ;color: #333;font-weight: bold;font-size: 15px;border-radius: 15px;">Chụp
+              Hình Ảnh</button>
+          </div>
+          <div id="uploadTab" class="tab-content active">
+            <div class="button-group"
+              style="display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; justify-content: center;">
+              <label for="fileInput" class="upload-btn"
+                style="border: solid 1px #E6266F; cursor: pointer; background: #44921b; color: #fff; padding: 8px 16px; display: inline-block; font-size: 14px; border-radius: 8px;">
+                <input type="file" id="fileInput" accept="image/*" hidden />
+                <span>Chọn Tệp</span>
+              </label>
+              <button id="enhanceBtn" class="enhance-btn" type="button"
+                style="padding: 8px 16px; font-size: 14px; border-radius: 8px;">
+                Nâng Cao Chất Lượng Ảnh
+              </button>
+            </div>
+            <div class="preview" style="position: relative; width: 320px; height: 320px; margin: 0 auto;">
+              <canvas id="canvasUpload"></canvas>
+              <div id="resizableBox">
+                <div class="resizer top-left"></div>
+                <div class="resizer top-right"></div>
+                <div class="resizer bottom-left"></div>
+                <div class="resizer bottom-right"></div>
+              </div>
+            </div>
+            <div class="button-group"
+              style="display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; justify-content: center; align-items: center;">
+              <button id="autoCutBtn" class="btn" type="button"
+                style="padding: 8px 16px; font-size: 14px; border-radius: 8px;">Tự Động Cắt Và Đếm</button>
+              <div id="cutOptionsGroup" style="display:none; gap: 8px; align-items: center;">
+                <label for="partSizeSelect" style="font-size: 14px;">Kích thước vùng cắt (px):</label>
+                <select id="partSizeSelect" style="padding: 4px 8px; border-radius: 4px; font-size: 14px;">
+
+                  <option value="256">256</option>
+                  <option value="160" selected>160</option>
+                  <option value="128">128</option>
+                </select>
+                <button id="confirmTrayBtn" style="padding: 8px 16px; font-size: 14px; border-radius: 8px;"
+                  type="button">Xác nhận khay</button>
+              </div>
+            </div>
+          </div>
+          <div id="captureTab" class="tab-content">
+            <p style="margin-bottom: 8px;">Chụp hình ảnh của viên kim cương.</p>
+            <div class="button-group"
+              style="display: flex; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; justify-content: center; align-items: center;">
+              <select id="cameraSelect" style="padding: 6px 12px; border-radius: 6px; font-size: 14px;">
+                <option value="environment">Camera Sau</option>
+                <option value="user">Camera Trước</option>
+              </select>
+              <button id="openCameraBtn" class="btn" type="button"
+                style="padding: 8px 16px; font-size: 14px; border-radius: 8px;">Mở Camera</button>
+            </div>
+            <div class="video-container" style="display: none; position: relative;">
+              <video id="video" autoplay playsinline style="width: 100%;"></video>
+              <canvas id="cameraOverlay"
+                style="position: absolute; top: 0; left: 0; width: 100%; height: 100%;"></canvas>
+            </div>
+            <button id="takePhotoBtn" class="btn" type="button"
+              style="padding: 8px 16px; font-size: 14px; border-radius: 8px; margin-top: 8px;">Chụp Ảnh</button>
+            <img id="capturedPhoto" style="display:none; max-width:100%; margin-top:8px;" alt="Ảnh đã chụp">
+            <input type="file" id="mobileCaptureInput" accept="image/*" capture="environment" style="display:none" />
+          </div>
+          <input type="file" id="cameraInput" accept="image/*" capture="environment" style="display:none" />
+        </div>
+        <div class="image-preview card">
+          <h2>Ảnh Kết Quả</h2>
+          <div class="tabs" style="display: flex; justify-content: center; gap: 10px; margin-bottom: 10px;">
+            <button id="btnWithBox" class="tab-btn calculate-btn"
+              style="background-color: #E6266F ;color: #333;font-weight: bold;font-size: 15px;border-radius: 15px;">Tính
+              Toán</button>
+
+
+          </div>
+
+          <div id="totalCountDisplay" class="total-count"
+            style="display: flex; justify-content: center; align-items: center;">Tổng số: 0💎</div>
+          <div id="annotatedCanvas"
+            style="position: relative; display: flex; justify-content: center; align-items: center;">
+            <div id="zoomContainer" style="overflow: hidden; cursor: grab; position: relative;">
+              <canvas id="canvasAnnotated" width="320" height="320" style="display: block;"></canvas>
+            </div>
+            <div id="resultLoadingOverlay" style="display:none;">
+              <div class="spinner"></div>
+              <div class="loading-text">Đang xử lý, vui lòng chờ...</div>
+            </div>
+            
+          </div>
+          <button id="saveExcelBtn" style="padding: 8px 16px; font-size: 14px; border-radius: 8px;">Lưu kết quả</button>
+
+        </div>
+      </div>
+      <div class="results-container card">
+        <div style="display: flex; justify-content: space-between; align-items: center;">
+          <h2 style="margin: 0;">Kết Quả Đo Lường</h2>
+          <button id="openDashboardBtn" class="dashboard-btn" type="button">📊 Thống Kê</button>
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th style="padding: 20px;">STT</th>
+              <th style="padding: 20px;">Chiều Rộng (mm)</th>
+              <th style="padding: 20px;">Chiều Cao (mm)</th>
+              <th style="padding: 20px;">Hình Dạng</th>
+              <th style="padding: 20px;">Diện Tích (mm²)</th>
+              <th style="padding: 20px;">Đường Kính (mm)</th>
+            </tr>
+          </thead>
+          <tbody id="resultsTableBody"></tbody>
+        </table>
+      </div>
+      <div class="analysis-section card">
+        <h2 style="margin-bottom: 12px;">Kích Thước Khay & Tham Số Điều Chỉnh</h2>
+        <div class="tray-dimensions" style="margin-bottom: 12px;">
+          <div class="input-group" style="display: flex; gap: 15px; flex-wrap: wrap;">
+            <div style="flex: 1; min-width: 150px;">
+              <label for="trayLength" style="display: block; margin-bottom: 4px; font-size: 14px;">Chiều Dài
+                (mm):</label>
+              <input type="number" id="trayLength" min="0" step="0.1" value="150"
+                style="width: 100%; padding: 6px 8px; border-radius: 6px; font-size: 14px;">
+            </div>
+            <div style="flex: 1; min-width: 150px;">
+              <label for="trayWidth" style="display: block; margin-bottom: 4px; font-size: 14px;">Chiều Rộng
+                (mm):</label>
+              <input type="number" id="trayWidth" min="0" step="0.1" value="80"
+                style="width: 100%; padding: 6px 8px; border-radius: 6px; font-size: 14px;">
+            </div>
+          </div>
+        </div>
+        <div class="adjustment-parameters" style="margin-bottom: 12px;">
+          <div class="slider-group" style="margin-bottom: 8px;">
+            <label style="display: block; margin-bottom: 4px; font-size: 14px;">Kích Thước Tối Thiểu (mm): <span
+                id="minSizeValue">1.0</span></label>
+            <input type="range" id="minSize" min="0.5" max="10" step="0.1" value="1.0">
+          </div>
+          <div class="slider-group" style="margin-bottom: 8px;">
+            <label style="display: block; margin-bottom: 4px; font-size: 14px;">Kích Thước Font: <span
+                id="fontSizeValue">16</span>px</label>
+            <input type="range" id="fontSize" min="1" max="30" step="1" value="15">
+          </div>
+          <div class="slider-group" style="margin-bottom: 8px;">
+            <label style="display: block; margin-bottom: 4px; font-size: 14px;">Ngưỡng hình tròn: <span
+                id="circleThresholdValue">0.75</span></label>
+            <input type="range" id="circleThreshold" min="0.5" max="1" step="0.01" value="0.75">
+          </div>
+        </div>
+        <button id="calculateBtn" class="btn" type="button"
+          style="padding: 10px 20px; font-size: 14px; border-radius: 8px; width: 100%;">Tính Toán</button>
+      </div>
+    </div>
+  </div>
+  <div id="statsModal" class="modal">
+    <div class="modal-content">
+      <span class="close">&times;</span>
+      <h3>Thống Kê Nhanh</h3>
+      <p>Tổng số viên: <span id="statTotal">0</span></p>
+      <p>Hình Tròn: <span id="statCircle">0</span></p>
+      <p>Hình Tam Giác: <span id="statTriangle">0</span></p>
+      <canvas id="shapeChart" width="300" height="300"></canvas>
+    </div>
+  </div>
+  <div id="helpModal" class="modal">
+    <div class="modal-content" style="max-width: 320px;">
+      <span class="close" id="closeHelpModal">&times;</span>
+      <h3>Lưu ý</h3>
+      <ul style="text-align:left; font-size:15px; padding-left:18px;">
+        <li>Chỉ sử dụng ảnh rõ nét, không bị mờ hoặc lóa sáng.</li>
+        <li>Chức năng "Tự động cắt và đếm" phù hợp với ảnh có vật thể nhỏ. Không sát, chồng lên nhau.</li>
+        <li>"Ngưỡng hình tròn":
+          <br> - 0.5: Phát hiện hình tròn với độ chính xác thấp, phù hợp với ảnh có vật thể nhỏ, biến dạng.
+          <br> - 0.75: Phát hiện hình tròn với độ chính xác cao, phù hợp với ảnh có vật thể lớn.
+          <br> - 1: Phát hiện hình tròn với độ chính xác rất cao, phù hợp với ảnh có vật thể.
+        </li>
+        <li>Các thông tin về tham số chỉ là thông tin tham khảo, có thể không chính xác.</li>
+      </ul>
+    </div>
+  </div>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script src="script.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+</body>
+
+</html>
