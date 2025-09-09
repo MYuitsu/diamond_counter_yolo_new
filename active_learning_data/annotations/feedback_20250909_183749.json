@@ -1,0 +1,18 @@
+{
+  "image_path": "active_learning_data\\images\\feedback_20250909_183749.jpg",
+  "timestamp": "20250909_183749",
+  "predictions": [],
+  "user_corrections": {
+    "false_positives": [],
+    "missed_objects": [
+      {
+        "x": 136.25,
+        "y": 76,
+        "w": 50,
+        "h": 50,
+        "description": "Missed diamond at (161, 101)"
+      }
+    ]
+  },
+  "needs_manual_annotation": true
+}

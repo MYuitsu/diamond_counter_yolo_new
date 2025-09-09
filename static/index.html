@@ -124,7 +124,16 @@
             </div>
             
           </div>
-          <button id="saveExcelBtn" style="padding: 8px 16px; font-size: 14px; border-radius: 8px;">Lưu kết quả</button>
+          <div style="display: flex; gap: 10px; justify-content: center; margin-top: 10px;">
+            <button id="saveExcelBtn" style="padding: 8px 16px; font-size: 14px; border-radius: 8px;">Lưu kết quả</button>
+            <button id="startTrainBtn" onclick="startRetraining()" style="padding: 8px 16px; font-size: 14px; border-radius: 8px; background: linear-gradient(135deg, #ff6b35, #f7931e); color: white; border: none; cursor: pointer; font-weight: bold;">
+              🚀 Train Lại Model
+            </button>
+            <button id="modelInfoBtn" onclick="showModelInfo()" style="padding: 8px 16px; font-size: 14px; border-radius: 8px; background: linear-gradient(135deg, #4CAF50, #45a049); color: white; border: none; cursor: pointer; font-weight: bold;">
+              🤖 Model Info
+            </button>
+          </div>
+          <div id="trainStatus" style="margin-top: 8px; font-size: 12px; text-align: center; color: #666;"></div>
 
         </div>
       </div>
@@ -184,6 +193,27 @@
         </div>
         <button id="calculateBtn" class="btn" type="button"
           style="padding: 10px 20px; font-size: 14px; border-radius: 8px; width: 100%;">Tính Toán</button>
+        
+        <!-- Feedback Button -->
+        <div style="text-align: center; margin-top: 15px;">
+          <button id="feedbackBtn" type="button" onclick="enableFeedbackMode()"
+            style="background: linear-gradient(45deg, #FF6B6B, #4ECDC4);
+                   color: white;
+                   border: none;
+                   padding: 12px 24px;
+                   border-radius: 25px;
+                   font-weight: bold;
+                   cursor: pointer;
+                   font-size: 14px;
+                   box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+                   transition: all 0.3s ease;
+                   animation: pulse 2s infinite;">
+            🎯 Cải Thiện Model
+          </button>
+          <div style="font-size: 12px; color: #666; margin-top: 5px;">
+            💡 Giúp model học từ lỗi để cải thiện độ chính xác
+          </div>
+        </div>
       </div>
     </div>
   </div>

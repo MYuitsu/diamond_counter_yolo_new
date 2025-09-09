@@ -5,15 +5,128 @@ import cv2
 import numpy as np
 import base64
 import math
+import json
+import os
+from datetime import datetime
+import threading
+import subprocess
 
 app = Flask(__name__, static_folder='static')
 
 CORS(app, resources={r"/*": {"origins": "*"}})
-model = YOLO("runs/segment/success1/weights/best.pt")
+
+def get_latest_model_path():
+    """Tự động tìm và load model mới nhất từ training"""
+    # Thứ tự ưu tiên:
+    # 1. Model retrain mới nhất từ latest_retrain
+    # 2. Model gốc từ success1
+    
+    latest_retrain_path = "runs/segment/latest_retrain/best.pt"
+    original_model_path = "runs/segment/success1/weights/best.pt"
+    
+    if os.path.exists(latest_retrain_path):
+        # Kiểm tra thông tin model
+        info_path = "runs/segment/latest_retrain/model_info.json"
+        if os.path.exists(info_path):
+            try:
+                with open(info_path, 'r') as f:
+                    model_info = json.load(f)
+                print(f"📦 Loading RETRAINED model: {model_info['timestamp']} (Epochs: {model_info['epochs']}, Size: {model_info['model_size']})")
+                return latest_retrain_path
+            except:
+                pass
+        else:
+            print(f"📦 Loading retrained model: {latest_retrain_path}")
+            return latest_retrain_path
+    
+    if os.path.exists(original_model_path):
+        print(f"📦 Loading ORIGINAL model: {original_model_path}")
+        return original_model_path
+    
+    # Fallback tìm model mới nhất trong runs/segment
+    segment_dir = "runs/segment"
+    if os.path.exists(segment_dir):
+        retrain_dirs = [d for d in os.listdir(segment_dir) if d.startswith('diamond_retrain_')]
+        if retrain_dirs:
+            # Sắp xếp theo timestamp
+            retrain_dirs.sort(reverse=True)
+            latest_dir = retrain_dirs[0]
+            fallback_path = f"{segment_dir}/{latest_dir}/weights/best.pt"
+            if os.path.exists(fallback_path):
+                print(f"📦 Loading FALLBACK retrained model: {fallback_path}")
+                return fallback_path
+    
+    # Cuối cùng fallback về yolo default
+    print(f"⚠️ No custom model found, using default YOLOv8")
+    return "yolov8n-seg.pt"
+
+# Load model with auto-detection of latest retrained version
+model_path = get_latest_model_path()
+model = YOLO(model_path)
 
 all_detections = []
 
 TARGET_FINAL_SIZE = 1280 # Kích thước mục tiêu cho ảnh cuối cùng
+
+# Initialize active learning collector
+class ActiveLearningCollector:
+    def __init__(self):
+        self.feedback_dir = "active_learning_data"
+        os.makedirs(self.feedback_dir, exist_ok=True)
+        os.makedirs(f"{self.feedback_dir}/images", exist_ok=True)
+        os.makedirs(f"{self.feedback_dir}/annotations", exist_ok=True)
+    
+    def save_user_feedback(self, image_data, predictions, user_corrections):
+        """Save user feedback for retraining - bao gồm true positives, false positives và missed objects"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        
+        # Save image
+        image_name = f"feedback_{timestamp}.jpg"
+        image_path = os.path.join(self.feedback_dir, "images", image_name)
+        
+        # Decode base64 image
+        if isinstance(image_data, str):
+            img_data = base64.b64decode(image_data)
+            with open(image_path, 'wb') as f:
+                f.write(img_data)
+        
+        # Tính toán true positives nếu chưa có
+        if 'true_positives' not in user_corrections:
+            false_positive_indices = set(user_corrections.get('false_positives', []))
+            true_positives = [pred for i, pred in enumerate(predictions) 
+                            if i not in false_positive_indices]
+            user_corrections['true_positives'] = true_positives
+        
+        # Đếm các loại annotations
+        tp_count = len(user_corrections.get('true_positives', []))
+        fp_count = len(user_corrections.get('false_positives', []))
+        missed_count = len(user_corrections.get('missed_objects', []))
+        total_ground_truth = tp_count + missed_count
+        
+        # Save annotations với thông tin đầy đủ
+        annotation_data = {
+            'image_path': image_path,
+            'timestamp': timestamp,
+            'predictions': predictions,
+            'user_corrections': user_corrections,
+            'annotation_stats': {
+                'true_positives': tp_count,
+                'false_positives': fp_count, 
+                'missed_objects': missed_count,
+                'total_predictions': len(predictions),
+                'total_ground_truth': total_ground_truth
+            },
+            'needs_manual_annotation': missed_count > 0
+        }
+        
+        annotation_path = os.path.join(self.feedback_dir, "annotations", f"feedback_{timestamp}.json")
+        with open(annotation_path, 'w', encoding='utf-8') as f:
+            json.dump(annotation_data, f, indent=2)
+        
+        return annotation_path
+
+# Initialize collector
+feedback_collector = ActiveLearningCollector()
 
 def resize_and_pad_image(image, target_size):
     h, w = image.shape[:2]
@@ -38,18 +151,24 @@ def draw_boxes_with_numbers(image, results, filtered_indexes, font_size):
         cv2.rectangle(image, (x1, y1), (x2, y2), (0, 255, 0), 2)
         label = f"{i + 1}"
         font_scale = font_size / 20.0
-        font_thickness = 2
+        font_thickness = max(2, int(font_scale * 2))
 
-        # Tọa độ chữ
+        # Tọa độ chữ và tính kích thước
         org = (x1 + 5, y1 + 20)
-
-        # Vẽ viền đen trước
+        text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)[0]
+        
+        # Vẽ background đen cho text để tăng độ tương phản
+        bg_x1, bg_y1 = org[0] - 3, org[1] - text_size[1] - 3
+        bg_x2, bg_y2 = org[0] + text_size[0] + 3, org[1] + 5
+        cv2.rectangle(image, (bg_x1, bg_y1), (bg_x2, bg_y2), (0, 0, 0), -1)
+        
+        # Vẽ viền đen dày hơn
         cv2.putText(image, label, org,
-                    cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), font_thickness + 2)
+                    cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), font_thickness + 4)
 
-        # Vẽ chữ màu chính đè lên (cam đậm)
+        # Vẽ chữ màu vàng sáng đè lên để dễ nhìn
         cv2.putText(image, label, org,
-                    cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 69, 255), font_thickness)
+                    cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 255), font_thickness)
     return image
 
 def detect_shape(contour, circle_threshold=0.75):
@@ -385,15 +504,24 @@ def final_result():
         cv2.rectangle(annotated_image_to_return, (final_x, final_y), (final_x + final_w, final_y + final_h), (0, 255, 0), 2)
         label = f"{i + 1}"
         font_scale = font_size / 30.0
+        font_thickness = max(2, int(font_scale * 3))
         org = (final_x + 5, final_y + 20)
 
-        # Viền đen
-        cv2.putText(annotated_image_to_return, label, org,
-                cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), 3)
+        # Tính kích thước text để vẽ background
+        text_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)[0]
+        
+        # Vẽ background đen cho text để tăng độ tương phản
+        bg_x1, bg_y1 = org[0] - 3, org[1] - text_size[1] - 3
+        bg_x2, bg_y2 = org[0] + text_size[0] + 3, org[1] + 5
+        cv2.rectangle(annotated_image_to_return, (bg_x1, bg_y1), (bg_x2, bg_y2), (0, 0, 0), -1)
 
-        # Chữ màu chính (cam đậm)
+        # Viền đen dày hơn
         cv2.putText(annotated_image_to_return, label, org,
-                cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 69, 255), 2)
+                cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 0, 0), font_thickness + 4)
+
+        # Chữ màu vàng sáng để dễ nhìn
+        cv2.putText(annotated_image_to_return, label, org,
+                cv2.FONT_HERSHEY_SIMPLEX, font_scale, (0, 255, 255), font_thickness)
 
                     
 
@@ -413,7 +541,299 @@ def final_result():
         "annotated_image": encoded_img,
     })
 
+@app.route("/submit_feedback", methods=["POST"])
+def submit_feedback():
+    """
+    Endpoint để nhận feedback từ user về predictions
+    """
+    try:
+        data = request.json
+        image_data = data.get('image_data')
+        predictions = data.get('predictions', [])
+        corrections = data.get('corrections', {})
+        
+        # Save feedback
+        annotation_path = feedback_collector.save_user_feedback(
+            image_data, predictions, corrections
+        )
+        
+        return jsonify({
+            "status": "success",
+            "message": "Feedback saved for retraining",
+            "annotation_path": annotation_path
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error", 
+            "message": f"Error: {str(e)}"
+        }), 500
+
+@app.route("/get_training_suggestions", methods=["GET"])
+def get_training_suggestions():
+    """Get suggestions for retraining based on feedback"""
+    try:
+        annotation_files = [f for f in os.listdir(f"{feedback_collector.feedback_dir}/annotations") 
+                          if f.endswith('.json')]
+        
+        if not annotation_files:
+            return jsonify({"message": "No feedback data available"})
+        
+        total_feedback = len(annotation_files)
+        false_positives = 0
+        missed_objects = 0
+        
+        for file in annotation_files[-10:]:  # Last 10 feedback
+            try:
+                with open(f"{feedback_collector.feedback_dir}/annotations/{file}", 'r', encoding='utf-8') as f:
+                    data = json.load(f)
+                
+                corrections = data.get('user_corrections', {})
+                false_positives += len(corrections.get('false_positives', []))
+                missed_objects += len(corrections.get('missed_objects', []))
+                        
+            except:
+                continue
+        
+        suggestions = []
+        
+        if false_positives > total_feedback * 0.15:
+            suggestions.append("⚠️ High false positive rate - increase confidence threshold")
+        
+        if missed_objects > 5:
+            suggestions.append(f"🎯 {missed_objects} missed detections - add to training data")
+        
+        return jsonify({
+            "total_feedback": total_feedback,
+            "false_positives": false_positives,
+            "missed_objects": missed_objects,
+            "suggestions": suggestions,
+            "retrain_command": "yolo task=segment mode=train model=yolov8s-seg.pt data=roboflow_feedback/data.yaml epochs=50"
+        })
+        
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
+@app.route("/start_retraining", methods=["POST"])
+def start_retraining():
+    """Bắt đầu quá trình retraining model với feedback data"""
+    try:
+        # Kiểm tra có feedback data không
+        annotation_files = [f for f in os.listdir(f"{feedback_collector.feedback_dir}/annotations") 
+                          if f.endswith('.json')]
+        
+        if not annotation_files:
+            return jsonify({
+                "status": "error",
+                "message": "Không có feedback data để train! Vui lòng thu thập feedback trước."
+            })
+        
+        # Get training parameters
+        data = request.json or {}
+        epochs = data.get('epochs', 100)  # Tăng default epochs theo chuẩn
+        model_size = data.get('model_size', 'n')  # n, s, m, l, x
+        
+        # Start retraining in background thread
+        def run_retraining():
+            try:
+                # Sử dụng memory-efficient training script
+                result = subprocess.run([
+                    'python', 'memory_efficient_train.py', 
+                    '--epochs', str(epochs),
+                    '--model', str(model_size),
+                    '--auto'
+                ], 
+                capture_output=True, 
+                text=True, 
+                encoding='utf-8',
+                errors='replace',
+                cwd=os.getcwd())
+                
+                print(f"Memory-efficient training output: {result.stdout}")
+                if result.stderr:
+                    print(f"Training warnings: {result.stderr}")
+                if result.returncode == 0:
+                    print("Training completed successfully!")
+                else:
+                    print(f"Training failed with code: {result.returncode}")
+                    
+            except Exception as e:
+                print(f"Retraining thread error: {e}")
+        
+        # Start background thread
+        training_thread = threading.Thread(target=run_retraining)
+        training_thread.daemon = True
+        training_thread.start()
+        
+        return jsonify({
+            "status": "success",
+            "message": f"🚀 Bắt đầu training theo chuẩn Roboflow với {len(annotation_files)} feedback samples",
+            "feedback_count": len(annotation_files),
+            "epochs": epochs,
+            "model_size": f"yolov8{model_size}-seg.pt",
+            "dataset_format": "Roboflow (70% train, 25% valid, 5% test)",
+            "note": "Training đang chạy trong background. Kiểm tra terminal để xem tiến trình."
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Lỗi khi bắt đầu training: {str(e)}"
+        })
+
+@app.route("/reload_model", methods=["POST"])
+def reload_model():
+    """Reload model để sử dụng version mới nhất sau khi training xong"""
+    try:
+        global model
+        
+        # Tìm và load model mới nhất
+        new_model_path = get_latest_model_path()
+        
+        # Backup thông tin model cũ
+        old_model_info = {
+            'path': getattr(model, 'ckpt_path', 'unknown'),
+            'timestamp': datetime.now().isoformat()
+        }
+        
+        # Load model mới
+        model = YOLO(new_model_path)
+        
+        # Lấy thông tin model mới
+        model_info = {}
+        info_path = "runs/segment/latest_retrain/model_info.json"
+        if os.path.exists(info_path):
+            try:
+                with open(info_path, 'r') as f:
+                    model_info = json.load(f)
+            except:
+                pass
+        
+        print(f"🔄 Model reloaded: {new_model_path}")
+        
+        return jsonify({
+            "status": "success", 
+            "message": "Model đã được reload thành công!",
+            "model_path": new_model_path,
+            "model_info": model_info,
+            "old_model": old_model_info['path'],
+            "reload_time": datetime.now().isoformat()
+        })
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Lỗi khi reload model: {str(e)}"
+        })
+
+@app.route("/training_status", methods=["GET"])
+def training_status():
+    """Kiểm tra trạng thái training"""
+    try:
+        # Kiểm tra các file training gần đây
+        runs_dir = "runs/segment"
+        status_info = {
+            "current_model": model_path,
+            "training_runs": [],
+            "latest_retrain": None
+        }
+        
+        if os.path.exists(runs_dir):
+            subdirs = [d for d in os.listdir(runs_dir) if d.startswith('diamond_retrain_')]
+            if subdirs:
+                # Sắp xếp theo timestamp
+                subdirs.sort(reverse=True)
+                
+                for subdir in subdirs[:5]:  # Top 5 latest
+                    weights_path = os.path.join(runs_dir, subdir, "weights", "best.pt")
+                    if os.path.exists(weights_path):
+                        # Parse thông tin từ tên folder
+                        parts = subdir.split('_')
+                        if len(parts) >= 4:
+                            timestamp = f"{parts[2]}_{parts[3]}"
+                            epochs = parts[4].replace('ep', '') if len(parts) > 4 else 'unknown'
+                            model_size = parts[5] if len(parts) > 5 else 'unknown'
+                            
+                            status_info["training_runs"].append({
+                                "name": subdir,
+                                "timestamp": timestamp,
+                                "epochs": epochs,
+                                "model_size": model_size,
+                                "path": weights_path,
+                                "is_current": weights_path == model_path
+                            })
+                
+                if subdirs:
+                    latest_run = subdirs[0]
+                    latest_weights = os.path.join(runs_dir, latest_run, "weights", "best.pt")
+                    
+                    if os.path.exists(latest_weights):
+                        status_info["latest_retrain"] = latest_run
+                        status_info["status"] = "completed"
+                        status_info["message"] = f"✅ Latest training: {latest_run}"
+                    else:
+                        status_info["status"] = "running"
+                        status_info["message"] = f"🏋️ Training in progress: {latest_run}"
+        
+        # Kiểm tra model info
+        info_path = "runs/segment/latest_retrain/model_info.json"
+        if os.path.exists(info_path):
+            with open(info_path, 'r') as f:
+                status_info["current_model_info"] = json.load(f)
+        
+        if not status_info["training_runs"]:
+            status_info["status"] = "idle"
+            status_info["message"] = "Chưa có training nào được thực hiện"
+        
+        return jsonify(status_info)
+        
+    except Exception as e:
+        return jsonify({
+            "status": "error",
+            "message": f"Lỗi kiểm tra trạng thái: {str(e)}"
+        })
+
+@app.route("/model_info", methods=["GET"])
+def model_info():
+    """Lấy thông tin model hiện tại"""
+    try:
+        info = {
+            "current_model_path": model_path,
+            "model_type": "retrained" if "retrain" in model_path else "original"
+        }
+        
+        # Thông tin chi tiết nếu có
+        info_path = "runs/segment/latest_retrain/model_info.json"
+        if os.path.exists(info_path):
+            with open(info_path, 'r') as f:
+                info["retrain_info"] = json.load(f)
+        
+        return jsonify(info)
+        
+    except Exception as e:
+        return jsonify({"error": str(e)})
+
 if __name__ == "__main__":
+    print("🚀 DIAMOND COUNTER WITH ACTIVE LEARNING")
+    print("📊 Feedback collector ready")
+    print(f"🤖 Current model: {model_path}")
+    
+    # Hiển thị thông tin model retrain nếu có
+    info_path = "runs/segment/latest_retrain/model_info.json"
+    if os.path.exists(info_path):
+        try:
+            with open(info_path, 'r') as f:
+                model_info = json.load(f)
+            print(f"✨ Using RETRAINED model:")
+            print(f"   📅 Trained: {model_info['timestamp']}")
+            print(f"   🧠 Model size: {model_info['model_size']}")
+            print(f"   🔄 Epochs: {model_info['epochs']}")
+            print(f"   📊 Data: {model_info['training_data']}")
+        except:
+            print("✨ Using retrained model (info file corrupted)")
+    else:
+        print("📦 Using original model")
+    
     app.run(debug=True, threaded=True, host="0.0.0.0", port=5000)
 
 

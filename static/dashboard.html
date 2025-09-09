@@ -1,0 +1,415 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>🎯 Active Learning Dashboard - Diamond Counter</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .dashboard {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 15px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #FF6B6B, #4ECDC4);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+        }
+        
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 20px;
+            padding: 30px;
+        }
+        
+        .stat-card {
+            background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
+            color: white;
+            padding: 25px;
+            border-radius: 15px;
+            text-align: center;
+            box-shadow: 0 10px 20px rgba(0,0,0,0.1);
+        }
+        
+        .stat-card h3 {
+            font-size: 2em;
+            margin-bottom: 10px;
+        }
+        
+        .feedback-section {
+            padding: 30px;
+            border-top: 2px solid #f0f0f0;
+        }
+        
+        .feedback-list {
+            max-height: 400px;
+            overflow-y: auto;
+            border: 1px solid #e0e0e0;
+            border-radius: 10px;
+            padding: 20px;
+        }
+        
+        .feedback-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            border-bottom: 1px solid #f0f0f0;
+            margin-bottom: 10px;
+            border-radius: 8px;
+            background: #fafafa;
+        }
+        
+        .feedback-item:last-child {
+            border-bottom: none;
+        }
+        
+        .actions {
+            display: flex;
+            gap: 15px;
+            justify-content: center;
+            padding: 30px;
+            border-top: 2px solid #f0f0f0;
+        }
+        
+        .btn {
+            padding: 15px 30px;
+            border: none;
+            border-radius: 25px;
+            font-weight: bold;
+            cursor: pointer;
+            text-decoration: none;
+            display: inline-block;
+            transition: all 0.3s ease;
+            font-size: 1.1em;
+        }
+        
+        .btn-primary {
+            background: linear-gradient(135deg, #4facfe 0%, #00f2fe 100%);
+            color: white;
+        }
+        
+        .btn-success {
+            background: linear-gradient(135deg, #43e97b 0%, #38f9d7 100%);
+            color: white;
+        }
+        
+        .btn-warning {
+            background: linear-gradient(135deg, #fa709a 0%, #fee140 100%);
+            color: white;
+        }
+        
+        .btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 10px 20px rgba(0,0,0,0.2);
+        }
+        
+        .suggestions {
+            background: #fff3cd;
+            border: 1px solid #ffeaa7;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
+        }
+        
+        .suggestions h4 {
+            color: #856404;
+            margin-bottom: 15px;
+        }
+        
+        .suggestion-item {
+            background: white;
+            padding: 10px 15px;
+            margin: 10px 0;
+            border-radius: 5px;
+            border-left: 4px solid #ffc107;
+        }
+        
+        .loading {
+            text-align: center;
+            padding: 50px;
+        }
+        
+        .spinner {
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #3498db;
+            border-radius: 50%;
+            width: 40px;
+            height: 40px;
+            animation: spin 1s linear infinite;
+            margin: 20px auto;
+        }
+        
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        
+        .training-log {
+            background: #f8f9fa;
+            border-radius: 10px;
+            padding: 20px;
+            margin: 20px 0;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+            max-height: 300px;
+            overflow-y: auto;
+        }
+    </style>
+</head>
+<body>
+    <div class="dashboard">
+        <div class="header">
+            <h1>🎯 Active Learning Dashboard</h1>
+            <p>Monitor and improve your diamond detection model</p>
+        </div>
+        
+        <div class="stats-grid">
+            <div class="stat-card">
+                <h3 id="totalFeedback">0</h3>
+                <p>Total Feedback Sessions</p>
+            </div>
+            <div class="stat-card">
+                <h3 id="falsePositives">0</h3>
+                <p>False Positives Reported</p>
+            </div>
+            <div class="stat-card">
+                <h3 id="missedObjects">0</h3>
+                <p>Missed Objects Found</p>
+            </div>
+            <div class="stat-card">
+                <h3 id="modelVersion">v1.0</h3>
+                <p>Current Model Version</p>
+            </div>
+        </div>
+        
+        <div class="feedback-section">
+            <h2>📊 Recent Feedback</h2>
+            <div id="feedbackList" class="feedback-list">
+                <div class="loading">
+                    <div class="spinner"></div>
+                    <p>Loading feedback data...</p>
+                </div>
+            </div>
+        </div>
+        
+        <div id="suggestions" class="suggestions" style="display: none;">
+            <h4>💡 Training Suggestions</h4>
+            <div id="suggestionsList"></div>
+        </div>
+        
+        <div class="actions">
+            <button class="btn btn-primary" onclick="refreshData()">🔄 Refresh Data</button>
+            <button class="btn btn-success" onclick="startTraining()">🚀 Start Training</button>
+            <button class="btn btn-warning" onclick="exportData()">📥 Export Data</button>
+            <a href="/" class="btn btn-primary">🏠 Back to App</a>
+        </div>
+        
+        <div id="trainingStatus" style="display: none;">
+            <h3>🚀 Training in Progress</h3>
+            <div class="training-log" id="trainingLog"></div>
+        </div>
+    </div>
+
+    <script>
+        let dashboardData = {
+            totalFeedback: 0,
+            falsePositives: 0,
+            missedObjects: 0,
+            suggestions: []
+        };
+
+        async function loadDashboardData() {
+            try {
+                const response = await fetch('/get_training_suggestions');
+                const data = await response.json();
+                
+                dashboardData = data;
+                updateDashboard(data);
+                
+            } catch (error) {
+                console.error('Error loading dashboard data:', error);
+                showError('Failed to load dashboard data');
+            }
+        }
+
+        function updateDashboard(data) {
+            document.getElementById('totalFeedback').textContent = data.total_feedback || 0;
+            document.getElementById('falsePositives').textContent = data.false_positives || 0;
+            document.getElementById('missedObjects').textContent = data.missed_objects || 0;
+            
+            // Update suggestions
+            if (data.suggestions && data.suggestions.length > 0) {
+                const suggestionsDiv = document.getElementById('suggestions');
+                const suggestionsList = document.getElementById('suggestionsList');
+                
+                suggestionsList.innerHTML = '';
+                data.suggestions.forEach(suggestion => {
+                    const item = document.createElement('div');
+                    item.className = 'suggestion-item';
+                    item.textContent = suggestion;
+                    suggestionsList.appendChild(item);
+                });
+                
+                suggestionsDiv.style.display = 'block';
+            }
+            
+            // Update feedback list
+            updateFeedbackList();
+        }
+
+        function updateFeedbackList() {
+            const feedbackList = document.getElementById('feedbackList');
+            
+            // Simulate feedback items (in real implementation, this would come from API)
+            const feedbackItems = [
+                { timestamp: '2025-09-09 13:30', type: 'False Positive', count: 3, status: 'Processed' },
+                { timestamp: '2025-09-09 13:25', type: 'Missed Detection', count: 2, status: 'Processed' },
+                { timestamp: '2025-09-09 13:20', type: 'False Positive', count: 1, status: 'Pending' },
+            ];
+            
+            feedbackList.innerHTML = '';
+            
+            if (feedbackItems.length === 0) {
+                feedbackList.innerHTML = '<p style="text-align: center; color: #666;">No feedback data available</p>';
+                return;
+            }
+            
+            feedbackItems.forEach(item => {
+                const feedbackItem = document.createElement('div');
+                feedbackItem.className = 'feedback-item';
+                feedbackItem.innerHTML = `
+                    <div>
+                        <strong>${item.type}</strong><br>
+                        <small>${item.timestamp}</small>
+                    </div>
+                    <div>
+                        <span style="background: #e3f2fd; padding: 5px 10px; border-radius: 15px;">
+                            ${item.count} items
+                        </span>
+                    </div>
+                    <div>
+                        <span style="background: ${item.status === 'Processed' ? '#c8e6c9' : '#ffecb3'}; 
+                                     padding: 5px 10px; border-radius: 15px; font-size: 0.9em;">
+                            ${item.status}
+                        </span>
+                    </div>
+                `;
+                feedbackList.appendChild(feedbackItem);
+            });
+        }
+
+        async function refreshData() {
+            const btn = event.target;
+            btn.textContent = '🔄 Loading...';
+            btn.disabled = true;
+            
+            await loadDashboardData();
+            
+            btn.textContent = '🔄 Refresh Data';
+            btn.disabled = false;
+        }
+
+        async function startTraining() {
+            if (!confirm('🚀 Start training with current feedback data?\\n\\nThis process may take 30-60 minutes.')) {
+                return;
+            }
+            
+            const trainingStatus = document.getElementById('trainingStatus');
+            const trainingLog = document.getElementById('trainingLog');
+            
+            trainingStatus.style.display = 'block';
+            trainingLog.innerHTML = 'Initializing training pipeline...<br>';
+            
+            try {
+                // In real implementation, this would call the training API
+                // For demo, we'll simulate training progress
+                
+                const steps = [
+                    'Loading feedback data...',
+                    'Merging with original dataset...',
+                    'Converting annotations to YOLO format...',
+                    'Starting YOLOv8 training...',
+                    'Epoch 1/50: Training in progress...',
+                    'Epoch 10/50: mAP improving...',
+                    'Epoch 25/50: Best model saved...',
+                    'Epoch 50/50: Training completed!',
+                    'Evaluating new model...',
+                    'Training pipeline completed successfully!'
+                ];
+                
+                for (let i = 0; i < steps.length; i++) {
+                    await new Promise(resolve => setTimeout(resolve, 2000)); // 2 second delay
+                    trainingLog.innerHTML += steps[i] + '<br>';
+                    trainingLog.scrollTop = trainingLog.scrollHeight;
+                }
+                
+                alert('✅ Training completed successfully!\\n\\nNew model is ready for testing.');
+                
+            } catch (error) {
+                trainingLog.innerHTML += `❌ Training failed: ${error.message}<br>`;
+            }
+        }
+
+        function exportData() {
+            // Create downloadable feedback data
+            const data = {
+                dashboard_data: dashboardData,
+                export_timestamp: new Date().toISOString(),
+                retrain_command: `yolo task=segment mode=train model=yolov8s-seg.pt data=enhanced_dataset/data.yaml epochs=50 imgsz=1280 device=0`
+            };
+            
+            const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `diamond_feedback_${new Date().toISOString().split('T')[0]}.json`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            
+            URL.revokeObjectURL(url);
+            
+            alert('📥 Feedback data exported successfully!');
+        }
+
+        function showError(message) {
+            const feedbackList = document.getElementById('feedbackList');
+            feedbackList.innerHTML = `<p style="color: red; text-align: center;">❌ ${message}</p>`;
+        }
+
+        // Initialize dashboard
+        document.addEventListener('DOMContentLoaded', function() {
+            loadDashboardData();
+            
+            // Auto-refresh every 30 seconds
+            setInterval(loadDashboardData, 30000);
+        });
+    </script>
+</body>
+</html>

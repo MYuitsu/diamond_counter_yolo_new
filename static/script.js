@@ -1,6 +1,12 @@
-//XỬ LÝ TÍNH NĂNG TỰ ĐỘNG ĐẾM KIM CƯƠNG VỚI KHAY
+//XỬ LÝ TÍNH NĂNG TỰ ĐỘNG ĐẾM KIM CƯƠNG VỚI KHAY VÀ ACTIVE LEARNING
 // Tạo một biến toàn cục để lưu trữ vùng khay
 window.trayRegion = null;
+window.currentPredictions = []; // Store current predictions for feedback
+window.userCorrections = {
+    false_positives: [],
+    missed_objects: []
+};
+
 // Hàm này sẽ được gọi khi người dùng xác nhận vùng khay
 // region_x, region_y, region_w, region_h là tọa độ và kích thước của vùng khay
 // tray_width, tray_length là kích thước của khay
@@ -35,6 +41,9 @@ async function autoCountDiamonds() {
 
         let totalDiamonds = 0;
 
+        // Thêm class scanning cho animation
+        const box = document.getElementById("resizableBox");
+        box.classList.add("scanning");
 
         // Lấy scale giữa canvas hiển thị (CSS) và canvas nội bộ (width 640)
         const scale = canvas.clientWidth / canvas.width;
@@ -49,7 +58,7 @@ async function autoCountDiamonds() {
                 box.style.width = (partSize * scale) + "px";
                 box.style.height = (partSize * scale) + "px";
 
-                await new Promise(resolve => setTimeout(resolve, 100)); // Cập nhật giao diện
+                await new Promise(resolve => setTimeout(resolve, 25)); // Tăng tốc animation từ 100ms xuống 25ms
 
                 // Cắt toàn ảnh (vì YOLO sẽ xử lý qua tọa độ vùng)
                 const promise = (async () => {
@@ -135,6 +144,10 @@ async function autoCountDiamonds() {
             });
         }
     } finally {
+        // Remove scanning animation khi hoàn thành
+        const box = document.getElementById("resizableBox");
+        box.classList.remove("scanning");
+        
         setUIEnabled(true);
     }
 }
@@ -1032,8 +1045,713 @@ zoomContainer.addEventListener('mouseup', () => {
 
 zoomContainer.addEventListener('mouseleave', () => {
     isPanning = false;
-    zoomContainer.style.cursor = 'grab';
 });
 
+// ACTIVE LEARNING FEEDBACK FUNCTIONS
+function enableFeedbackMode() {
+    const canvas = document.getElementById("canvasAnnotated"); // Đổi sang canvas kết quả có số
+    if (!canvas) {
+        showToast("❌ Vui lòng tính toán trước khi cải thiện model!", "error");
+        return;
+    }
+    
+    // Remove existing overlay if any
+    const existingOverlay = document.getElementById('feedback-overlay');
+    if (existingOverlay) {
+        existingOverlay.remove();
+    }
+    
+    const existingControls = document.getElementById('feedback-controls');
+    if (existingControls) {
+        existingControls.remove();
+    }
+    
+    const feedbackOverlay = document.createElement('div');
+    feedbackOverlay.id = 'feedback-overlay';
+    feedbackOverlay.style.cssText = `
+        position: absolute;
+        top: 0;
+        left: 0;
+        width: 100%;
+        height: 100%;
+        pointer-events: auto;
+        z-index: 1000;
+        cursor: crosshair;
+        background: rgba(255, 215, 0, 0.15);
+        border: 3px solid #FFD700;
+        box-shadow: 0 0 15px rgba(255, 215, 0, 0.8);
+        animation: feedbackPulse 2s infinite;
+    `;
+    
+    canvas.parentElement.appendChild(feedbackOverlay);
+    
+    // Add improved feedback controls
+    const feedbackControls = document.createElement('div');
+    feedbackControls.innerHTML = `
+        <div style="position: fixed; top: 10px; right: 10px; background: white; padding: 12px; border-radius: 8px; box-shadow: 0 4px 20px rgba(0,0,0,0.3); z-index: 1001; max-width: 200px; font-size: 12px;">
+            <h4 style="margin: 0 0 8px 0; color: #333; font-size: 14px;">🎯 Cải Thiện Model</h4>
+            
+            <div style="background: #fff3cd; border: 1px solid #ffc107; padding: 8px; border-radius: 5px; margin-bottom: 8px; font-size: 11px;">
+                <strong style="color: #856404;">📍 Hướng dẫn:</strong><br>
+                🔴 Click <strong>SỐ VÀNG</strong> nếu SAI<br>
+                🟠 Click <strong>CHỖ TRỐNG</strong> nếu THIẾU<br>
+                <em style="color: #6c757d;">💡 Click trên ảnh có số!</em>
+            </div>
+            
+            <div style="margin-bottom: 8px; font-size: 11px;">
+                <div>✅ Đúng: <span id="tpCount" style="font-weight: bold; color: green;">0</span></div>
+                <div>❌ Sai: <span id="fpCount" style="font-weight: bold; color: red;">0</span></div>
+                <div>➕ Thiếu: <span id="missedCount" style="font-weight: bold; color: orange;">0</span></div>
+            </div>
+            
+            <div style="display: flex; gap: 5px; margin-bottom: 5px;">
+                <button onclick="submitFeedback()" style="flex: 1; background: #4CAF50; color: white; border: none; padding: 6px; border-radius: 3px; cursor: pointer; font-weight: bold; font-size: 10px;">
+                    ✅ Gửi
+                </button>
+                <button onclick="cancelFeedback()" style="flex: 1; background: #f44336; color: white; border: none; padding: 6px; border-radius: 3px; cursor: pointer; font-size: 10px;">
+                    ❌ Hủy
+                </button>
+            </div>
+            
+            <div style="border-top: 1px solid #ffc107; padding-top: 5px; margin-top: 5px;">
+                <button onclick="startRetraining()" style="width: 100%; background: linear-gradient(135deg, #ff6b35, #f7931e); color: white; border: none; padding: 6px; border-radius: 5px; cursor: pointer; font-weight: bold; font-size: 10px; margin-bottom: 3px;">
+                    🚀 Train Model
+                </button>
+                <button onclick="reloadModel()" style="width: 100%; background: linear-gradient(135deg, #28a745, #20c997); color: white; border: none; padding: 6px; border-radius: 5px; cursor: pointer; font-weight: bold; font-size: 10px;">
+                    🔄 Load New Model
+                </button>
+                <div id="retrainStatus" style="margin-top: 4px; font-size: 9px; text-align: center;"></div>
+            </div>
+            
+            <div style="margin-top: 5px; font-size: 9px; color: #666; text-align: center;">
+                💡 Feedback giúp model học tốt hơn
+            </div>
+        </div>
+    `;
+    document.body.appendChild(feedbackControls);
+    feedbackControls.id = 'feedback-controls';
+    
+    // Add click handlers
+    feedbackOverlay.addEventListener('click', handleFeedbackClick);
+    
+    // Update counters
+    updateFeedbackCounters();
+}
+
+function handleFeedbackClick(event) {
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = event.clientX - rect.left;
+    const y = event.clientY - rect.top;
+    
+    // Check if clicking on existing detection
+    const clickedDetection = findDetectionAtPoint(x, y);
+    
+    if (clickedDetection) {
+        // Mark as false positive (detection sai)
+        if (!window.userCorrections.false_positives.includes(clickedDetection.index)) {
+            window.userCorrections.false_positives.push(clickedDetection.index);
+            highlightFalsePositive(clickedDetection);
+            
+            // Show feedback to user
+            showToast(`❌ Đã đánh dấu detection #${clickedDetection.index + 1} là SAI`, 'error');
+        } else {
+            // Unmark false positive
+            const index = window.userCorrections.false_positives.indexOf(clickedDetection.index);
+            window.userCorrections.false_positives.splice(index, 1);
+            removeFalsePositiveHighlight(clickedDetection.index);
+            showToast(`↩️ Đã bỏ đánh dấu detection #${clickedDetection.index + 1}`, 'info');
+        }
+    } else {
+        // Mark as missed object (thiếu kim cương)
+        const missedObject = {
+            x: x - 25, y: y - 25, w: 50, h: 50,
+            description: `Missed diamond at (${Math.round(x)}, ${Math.round(y)})`
+        };
+        window.userCorrections.missed_objects.push(missedObject);
+        highlightMissedObject(missedObject, window.userCorrections.missed_objects.length - 1);
+        
+        showToast(`➕ Đã thêm kim cương thiếu tại (${Math.round(x)}, ${Math.round(y)})`, 'success');
+    }
+    
+    // Update counters
+    updateFeedbackCounters();
+}
+
+function findDetectionAtPoint(x, y) {
+    // Find detection box at clicked point
+    for (let i = 0; i < window.currentPredictions.length; i++) {
+        const pred = window.currentPredictions[i];
+        if (pred.x <= x && x <= pred.x + pred.w && 
+            pred.y <= y && y <= pred.y + pred.h) {
+            return { ...pred, index: i };
+        }
+    }
+    return null;
+}
+
+function highlightFalsePositive(detection) {
+    const highlight = document.createElement('div');
+    highlight.style.cssText = `
+        position: absolute;
+        left: ${detection.x}px;
+        top: ${detection.y}px;
+        width: ${detection.w}px;
+        height: ${detection.h}px;
+        border: 3px solid red;
+        background: rgba(255, 0, 0, 0.2);
+        pointer-events: none;
+        z-index: 999;
+    `;
+    highlight.className = 'false-positive-highlight';
+    document.getElementById('feedback-overlay').appendChild(highlight);
+}
+
+function highlightMissedObject(missed, index) {
+    const highlight = document.createElement('div');
+    // Giảm kích thước marker xuống 60% so với vùng thực tế
+    const markerSize = Math.min(missed.w, missed.h) * 0.6;
+    const offsetX = (missed.w - markerSize) / 2;
+    const offsetY = (missed.h - markerSize) / 2;
+    
+    highlight.style.cssText = `
+        position: absolute;
+        left: ${missed.x + offsetX}px;
+        top: ${missed.y + offsetY}px;
+        width: ${markerSize}px;
+        height: ${markerSize}px;
+        border: 2px solid orange;
+        background: rgba(255, 165, 0, 0.3);
+        pointer-events: none;
+        z-index: 999;
+        border-radius: 50%;
+    `;
+    highlight.className = 'missed-object-highlight';
+    highlight.dataset.index = index;
+    
+    // Add label nhỏ gọn hơn
+    const label = document.createElement('div');
+    label.style.cssText = `
+        position: absolute;
+        top: -20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: orange;
+        color: white;
+        padding: 2px 6px;
+        border-radius: 3px;
+        font-size: 10px;
+        font-weight: bold;
+        white-space: nowrap;
+    `;
+    label.textContent = `+${index + 1}`;
+    highlight.appendChild(label);
+    
+    document.getElementById('feedback-overlay').appendChild(highlight);
+}
+
+function removeFalsePositiveHighlight(detectionIndex) {
+    const highlights = document.querySelectorAll('.false-positive-highlight');
+    highlights.forEach(highlight => {
+        if (highlight.dataset.index == detectionIndex) {
+            highlight.remove();
+        }
+    });
+}
+
+function updateFeedbackCounters() {
+    const tpCount = document.getElementById('tpCount');
+    const fpCount = document.getElementById('fpCount');
+    const missedCount = document.getElementById('missedCount');
+    
+    // Tính true positives từ total predictions - false positives
+    const totalPredictions = window.currentPredictions.length;
+    const falsePositiveCount = window.userCorrections.false_positives.length;
+    const truePositiveCount = totalPredictions - falsePositiveCount;
+    
+    if (tpCount) tpCount.textContent = truePositiveCount;
+    if (fpCount) fpCount.textContent = falsePositiveCount;
+    if (missedCount) missedCount.textContent = window.userCorrections.missed_objects.length;
+}
+
+function showToast(message, type = 'info') {
+    const toast = document.createElement('div');
+    toast.style.cssText = `
+        position: fixed;
+        top: 20px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: ${type === 'error' ? '#f44336' : type === 'success' ? '#4CAF50' : '#2196F3'};
+        color: white;
+        padding: 12px 24px;
+        border-radius: 25px;
+        font-weight: bold;
+        z-index: 10000;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        animation: slideDown 0.3s ease;
+    `;
+    toast.textContent = message;
+    
+    document.body.appendChild(toast);
+    
+    // Auto remove after 3 seconds
+    setTimeout(() => {
+        toast.style.animation = 'slideUp 0.3s ease';
+        setTimeout(() => toast.remove(), 300);
+    }, 3000);
+}
+
+async function submitFeedback() {
+    const fpCount = window.userCorrections.false_positives.length;
+    const missedCount = window.userCorrections.missed_objects.length;
+    
+    // Tính true positives: tất cả predictions trừ đi false positives
+    const totalPredictions = window.currentPredictions.length;
+    const truePositiveCount = totalPredictions - fpCount;
+    
+    if (fpCount === 0 && missedCount === 0) {
+        alert('⚠️ Chưa có feedback nào!\n\nHãy:\n- Click vào detection SAI để đánh dấu\n- Click vào chỗ THIẾU kim cương để thêm');
+        return;
+    }
+    
+    const confirmMessage = `🎯 Xác nhận gửi feedback:\n\n` +
+        `✅ Detection đúng: ${truePositiveCount}\n` +
+        `❌ Detection sai: ${fpCount}\n` +
+        `➕ Kim cương thiếu: ${missedCount}\n\n` +
+        `Tổng cộng: ${truePositiveCount + missedCount} kim cương thực tế\n\n` +
+        `Dữ liệu này sẽ giúp cải thiện model. Tiếp tục?`;
+    
+    if (!confirm(confirmMessage)) {
+        return;
+    }
+    
+    try {
+        // Show loading
+        showToast('📤 Đang gửi feedback...', 'info');
+        
+        // Get current image data
+        const canvas = document.getElementById("canvasUpload");
+        const imageData = canvas.toDataURL('image/jpeg', 0.8);
+        
+        // Tạo danh sách true positives (các detection không bị đánh dấu false positive)
+        const truePositives = window.currentPredictions.filter((pred, index) => 
+            !window.userCorrections.false_positives.includes(index)
+        );
+        
+        // Submit feedback với đầy đủ thông tin
+        const response = await fetch('/submit_feedback', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                image_data: imageData.split(',')[1], // Remove data:image/jpeg;base64,
+                predictions: window.currentPredictions,
+                corrections: {
+                    ...window.userCorrections,
+                    true_positives: truePositives  // Thêm true positives
+                }
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (result.status === 'success') {
+            showToast('✅ Feedback đã được gửi thành công!', 'success');
+            
+            // Show detailed success message
+            setTimeout(() => {
+                alert(`🎉 Cảm ơn bạn đã góp ý!\n\n` +
+                      `✅ Detection đúng: ${truePositiveCount}\n` +
+                      `❌ Detection sai: ${fpCount}\n` +
+                      `➕ Thiếu: ${missedCount}\n` +
+                      `📊 Tổng annotations: ${truePositiveCount + missedCount}\n\n` +
+                      `🤖 Model sẽ học từ TẤT CẢ dữ liệu này\n` +
+                      `📈 Độ chính xác sẽ được cải thiện\n\n` +
+                      `💡 Tip: Tiếp tục sử dụng và feedback để model ngày càng tốt hơn!`);
+            }, 1000);
+        } else {
+            showToast('❌ Lỗi gửi feedback: ' + result.message, 'error');
+        }
+        
+    } catch (error) {
+        showToast('❌ Lỗi kết nối: ' + error.message, 'error');
+    }
+    
+    cancelFeedback();
+}
+
+function cancelFeedback() {
+    // Remove feedback overlay and controls
+    const overlay = document.getElementById('feedback-overlay');
+    const controls = document.getElementById('feedback-controls');
+    
+    if (overlay) overlay.remove();
+    if (controls) controls.remove();
+    
+    // Reset corrections
+    window.userCorrections = {
+        false_positives: [],
+        missed_objects: []
+    };
+}
+
+// Add feedback button to main interface
+function addFeedbackButton() {
+    // Tìm container phù hợp để thêm nút
+    const container = document.querySelector('.button-group') || 
+                     document.querySelector('#cutOptionsGroup').parentElement || 
+                     document.querySelector('.upload-capture-section');
+    
+    if (!container) {
+        console.error('Không tìm thấy container để thêm nút feedback');
+        return;
+    }
+    
+    // Kiểm tra xem nút đã tồn tại chưa
+    if (document.getElementById('feedbackBtn')) {
+        return; // Đã có nút rồi
+    }
+    
+    const feedbackBtn = document.createElement('button');
+    feedbackBtn.id = 'feedbackBtn';
+    feedbackBtn.innerHTML = '🎯 Cải Thiện Model';
+    feedbackBtn.style.cssText = `
+        background: linear-gradient(45deg, #FF6B6B, #4ECDC4);
+        color: white;
+        border: none;
+        padding: 12px 24px;
+        border-radius: 25px;
+        font-weight: bold;
+        cursor: pointer;
+        margin: 10px 5px;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.2);
+        font-size: 14px;
+        transition: all 0.3s ease;
+        animation: pulse 2s infinite;
+        display: inline-block;
+        position: relative;
+        z-index: 100;
+    `;
+    
+    feedbackBtn.onmouseover = function() {
+        this.style.transform = 'scale(1.05)';
+        this.style.boxShadow = '0 6px 20px rgba(0,0,0,0.3)';
+    };
+    feedbackBtn.onmouseout = function() {
+        this.style.transform = 'scale(1)';
+        this.style.boxShadow = '0 4px 15px rgba(0,0,0,0.2)';
+    };
+    feedbackBtn.onclick = enableFeedbackMode;
+    
+    // Thêm vào container đầu tiên tìm được
+    container.appendChild(feedbackBtn);
+    
+    console.log('✅ Đã thêm nút feedback vào:', container.className || container.tagName);
+    
+    // Add CSS animation nếu chưa có
+    if (!document.getElementById('feedback-animations')) {
+        const style = document.createElement('style');
+        style.id = 'feedback-animations';
+        style.textContent = `
+            @keyframes pulse {
+                0% { box-shadow: 0 4px 15px rgba(0,0,0,0.2), 0 0 0 0 rgba(255, 107, 107, 0.7); }
+                70% { box-shadow: 0 4px 15px rgba(0,0,0,0.2), 0 0 0 10px rgba(255, 107, 107, 0); }
+                100% { box-shadow: 0 4px 15px rgba(0,0,0,0.2), 0 0 0 0 rgba(255, 107, 107, 0); }
+            }
+            @keyframes slideDown {
+                from { opacity: 0; transform: translateX(-50%) translateY(-20px); }
+                to { opacity: 1; transform: translateX(-50%) translateY(0); }
+            }
+            @keyframes slideUp {
+                from { opacity: 1; transform: translateX(-50%) translateY(0); }
+                to { opacity: 0; transform: translateX(-50%) translateY(-20px); }
+            }
+        `;
+        document.head.appendChild(style);
+    }
+}
+
+// RETRAINING FUNCTIONS
+async function startRetraining() {
+    // Sử dụng element ID mới từ HTML
+    const statusDiv = document.getElementById('trainStatus') || document.getElementById('retrainStatus');
+    
+    if (!statusDiv) {
+        showToast('❌ Không tìm thấy status element', 'error');
+        return;
+    }
+    
+    try {
+        // Show loading
+        statusDiv.innerHTML = '🔄 Đang bắt đầu training...';
+        statusDiv.style.color = '#ffc107';
+        
+        // Get training parameters từ user với dialog cải tiến
+        const epochs = prompt('Số epochs để train (mặc định 100 cho chất lượng tốt):', '100');
+        if (!epochs || isNaN(epochs)) {
+            statusDiv.innerHTML = '❌ Đã hủy training';
+            statusDiv.style.color = '#dc3545';
+            return;
+        }
+        
+        // Model size selection
+        const modelChoice = prompt(`Chọn kích thước model:
+n - Nano (nhanh, nhỏ)
+s - Small (cân bằng) 
+m - Medium (chính xác hơn)
+l - Large (chất lượng cao)
+x - X-Large (tốt nhất)
+
+Nhập lựa chọn (mặc định 's'):`, 's');
+        
+        const validSizes = ['n', 's', 'm', 'l', 'x'];
+        const modelSize = validSizes.includes(modelChoice?.toLowerCase()) ? modelChoice.toLowerCase() : 's';
+        
+        // Start retraining
+        const response = await fetch('/start_retraining', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ 
+                epochs: parseInt(epochs),
+                model_size: modelSize
+            })
+        });
+        
+        const result = await response.json();
+        
+        if (result.status === 'success') {
+            statusDiv.innerHTML = `🚀 Training started: ${result.model_size}, ${result.epochs} epochs`;
+            statusDiv.style.color = '#28a745';
+            
+            showToast(`🚀 Training Roboflow bắt đầu! Model: ${result.model_size}`, 'success');
+            
+            // Start checking status periodically
+            checkTrainingStatus();
+            
+        } else {
+            statusDiv.innerHTML = '❌ Lỗi: ' + result.message;
+            statusDiv.style.color = '#dc3545';
+            showToast('❌ ' + result.message, 'error');
+        }
+        
+    } catch (error) {
+        statusDiv.innerHTML = '❌ Lỗi kết nối';
+        statusDiv.style.color = '#dc3545';
+        showToast('❌ Lỗi: ' + error.message, 'error');
+    }
+}
+
+async function checkTrainingStatus() {
+    const statusDiv = document.getElementById('trainStatus') || document.getElementById('retrainStatus');
+    
+    if (!statusDiv) return;
+    
+    try {
+        const response = await fetch('/training_status');
+        const result = await response.json();
+        
+        if (result.status === 'completed') {
+            statusDiv.innerHTML = '✅ Training hoàn thành!';
+            statusDiv.style.color = '#28a745';
+            showToast('🎉 Training hoàn thành! Restart app để dùng model mới.', 'success');
+            
+        } else if (result.status === 'running') {
+            statusDiv.innerHTML = '🏋️ Training đang chạy...';
+            statusDiv.style.color = '#ffc107';
+            
+            // Check again after 30 seconds
+            setTimeout(checkTrainingStatus, 30000);
+            
+        } else if (result.status === 'error') {
+            statusDiv.innerHTML = '❌ Training lỗi';
+            statusDiv.style.color = '#dc3545';
+        }
+        
+    } catch (error) {
+        console.error('Error checking training status:', error);
+    }
+}
+
+// MODEL RELOAD FUNCTION
+async function reloadModel() {
+    const statusDiv = document.getElementById('trainStatus') || document.getElementById('retrainStatus');
+    
+    if (!statusDiv) {
+        showToast('❌ Không tìm thấy status element', 'error');
+        return;
+    }
+    
+    try {
+        // Show loading
+        statusDiv.innerHTML = '🔄 Đang reload model...';
+        statusDiv.style.color = '#ffc107';
+        
+        const response = await fetch('/reload_model', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' }
+        });
+        
+        const result = await response.json();
+        
+        if (result.status === 'success') {
+            statusDiv.innerHTML = '✅ Model reloaded!';
+            statusDiv.style.color = '#28a745';
+            
+            let message = '🔄 Model đã được reload thành công!';
+            if (result.model_info && result.model_info.training_type === 'transfer_learning') {
+                message += ` (Transfer Learning Model - ${result.model_info.epochs} epochs)`;
+            }
+            
+            showToast(message, 'success');
+            
+            // Show model info briefly
+            setTimeout(() => {
+                if (result.model_info) {
+                    statusDiv.innerHTML = `Model: ${result.model_info.model_size || 'custom'} - ${result.model_info.timestamp || 'latest'}`;
+                } else {
+                    statusDiv.innerHTML = '✅ Sẵn sàng với model mới';
+                }
+            }, 3000);
+            
+        } else {
+            statusDiv.innerHTML = '❌ Lỗi reload: ' + result.message;
+            statusDiv.style.color = '#dc3545';
+            showToast('❌ ' + result.message, 'error');
+        }
+        
+    } catch (error) {
+        statusDiv.innerHTML = '❌ Lỗi kết nối';
+        statusDiv.style.color = '#dc3545';
+        showToast('❌ Lỗi: ' + error.message, 'error');
+    }
+}
+
+// MODEL INFO FUNCTIONS
+async function showModelInfo() {
+    try {
+        const [modelResponse, statusResponse] = await Promise.all([
+            fetch('/model_info'),
+            fetch('/training_status')
+        ]);
+        
+        const modelInfo = await modelResponse.json();
+        const statusInfo = await statusResponse.json();
+        
+        let content = `
+            <div style="background: #f8f9fa; padding: 20px; border-radius: 10px; max-width: 600px;">
+                <h3 style="margin: 0 0 15px 0; color: #333;">🤖 Model Information</h3>
+                
+                <div style="background: white; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                    <h4 style="margin: 0 0 10px 0; color: #495057;">📦 Current Model</h4>
+                    <div style="font-family: monospace; background: #e9ecef; padding: 8px; border-radius: 4px; font-size: 12px;">
+                        ${modelInfo.current_model_path}
+                    </div>
+                    <div style="margin-top: 8px; color: #6c757d;">
+                        Type: ${modelInfo.model_type === 'retrained' ? '✨ Retrained Model' : '📦 Original Model'}
+                    </div>
+                </div>
+        `;
+        
+        // Thông tin retrain nếu có
+        if (modelInfo.retrain_info) {
+            const info = modelInfo.retrain_info;
+            content += `
+                <div style="background: white; padding: 15px; border-radius: 8px; margin-bottom: 15px;">
+                    <h4 style="margin: 0 0 10px 0; color: #495057;">✨ Retrain Details</h4>
+                    <div style="display: grid; grid-template-columns: 120px 1fr; gap: 8px; font-size: 14px;">
+                        <strong>Timestamp:</strong> <span>${info.timestamp}</span>
+                        <strong>Model Size:</strong> <span>YOLOv8${info.model_size}-seg</span>
+                        <strong>Epochs:</strong> <span>${info.epochs}</span>
+                        <strong>Training Data:</strong> <span>${info.training_data}</span>
+                        <strong>Created:</strong> <span>${new Date(info.created_at).toLocaleString()}</span>
+                    </div>
+                </div>
+            `;
+        }
+        
+        // Training history
+        if (statusInfo.training_runs && statusInfo.training_runs.length > 0) {
+            content += `
+                <div style="background: white; padding: 15px; border-radius: 8px;">
+                    <h4 style="margin: 0 0 10px 0; color: #495057;">📚 Training History</h4>
+                    <div style="max-height: 200px; overflow-y: auto;">
+            `;
+            
+            statusInfo.training_runs.forEach(run => {
+                const isActive = run.is_current ? '🟢' : '⚪';
+                content += `
+                    <div style="padding: 8px; border-bottom: 1px solid #dee2e6; display: flex; justify-content: between; align-items: center;">
+                        <div style="flex: 1;">
+                            <div style="font-size: 13px; font-weight: bold;">${isActive} ${run.timestamp}</div>
+                            <div style="font-size: 12px; color: #6c757d;">
+                                Model: ${run.model_size} | Epochs: ${run.epochs}
+                            </div>
+                        </div>
+                        ${run.is_current ? '<span style="background: #28a745; color: white; padding: 2px 6px; border-radius: 12px; font-size: 11px;">ACTIVE</span>' : ''}
+                    </div>
+                `;
+            });
+            
+            content += `
+                    </div>
+                </div>
+            `;
+        }
+        
+        content += `
+                <div style="margin-top: 15px; text-align: center;">
+                    <button onclick="closeModelInfo()" style="background: #6c757d; color: white; border: none; padding: 8px 16px; border-radius: 5px; cursor: pointer;">
+                        Đóng
+                    </button>
+                </div>
+            </div>
+        `;
+        
+        // Show modal
+        const modal = document.createElement('div');
+        modal.id = 'modelInfoModal';
+        modal.style.cssText = `
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0,0,0,0.5);
+            z-index: 9999;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            overflow-y: auto;
+        `;
+        
+        modal.innerHTML = content;
+        document.body.appendChild(modal);
+        
+    } catch (error) {
+        showToast('❌ Lỗi khi lấy thông tin model: ' + error.message, 'error');
+    }
+}
+
+function closeModelInfo() {
+    const modal = document.getElementById('modelInfoModal');
+    if (modal) {
+        modal.remove();
+    }
+}
+
+// Initialize feedback system when page loads
+document.addEventListener('DOMContentLoaded', function() {
+    // Nút feedback đã có trong HTML, chỉ cần đảm bảo function hoạt động
+    console.log('✅ Feedback system initialized');
+    
+    // Đảm bảo nút feedback có sẵn
+    const feedbackBtn = document.getElementById('feedbackBtn');
+    if (feedbackBtn) {
+        console.log('✅ Feedback button found in HTML');
+        // Đảm bảo onclick handler hoạt động
+        feedbackBtn.onclick = enableFeedbackMode;
+    } else {
+        console.warn('⚠️ Feedback button not found, adding dynamically...');
+        addFeedbackButton();
+    }
+});
 
 

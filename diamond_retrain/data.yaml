@@ -1,0 +1,7 @@
+names:
+- diamond
+nc: 1
+path: E:\github\diamond_counter_yolo_new\diamond_retrain
+test: test/images
+train: train/images
+val: valid/images

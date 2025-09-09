@@ -1,7 +1,8 @@
-flask==2.3.3
-flask-cors==4.0.0
-numpy==1.24.4
+flask==3.1.2
+flask-cors==6.0.1
+numpy==2.3.2
 ultralytics==8.3.158
 opencv-python-headless
-torch==2.1.0
-werkzeug<3.0.0
+torch==2.8.0+cu129
+torchvision==0.23.0+cu129
+werkzeug==3.1.3
